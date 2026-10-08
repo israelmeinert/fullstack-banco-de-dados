@@ -1,0 +1,184 @@
+name: live-bancos-de-dados
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.7-pg17-bookworm
+    environment:
+      POSTGRES_DB: aula
+      POSTGRES_USER: aula
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aula_local}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aula -d aula"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    mem_limit: 512m
+
+  mongodb:
+    image: mongo:8.0.15
+    ports:
+      - "127.0.0.1:${MONGODB_PORT:-27018}:27017"
+    volumes:
+      - mongodb_data:/data/db
+    command: ["mongod", "--wiredTigerCacheSizeGB", "0.25", "--bind_ip_all"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "quit(db.adminCommand({ping:1}).ok ? 0 : 1)"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+    mem_limit: 512m
+
+  redis:
+    image: redis:7.4.7-alpine
+    command: ["redis-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-16379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    mem_limit: 128m
+
+  cassandra:
+    image: cassandra:5.0@sha256:618a493bcf1f817ea2f07288a46fa76fb2d9c4dfd5a04c28227336405782889c
+    profiles: ["cassandra", "todos"]
+    environment:
+      CASSANDRA_CLUSTER_NAME: aula
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    ports:
+      - "127.0.0.1:${CASSANDRA_PORT:-19042}:9042"
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+      - ./laboratorio/cassandra:/scripts:ro
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'SELECT release_version FROM system.local'"]
+      interval: 10s
+      timeout: 10s
+      retries: 40
+      start_period: 60s
+    mem_limit: 1536m
+    stop_grace_period: 60s
+
+  neo4j:
+    image: neo4j:5.26-community@sha256:c7d25c0eeebfe125718d58b72ed5d663c85d0479047733845eb2237c67ce8069
+    profiles: ["neo4j", "todos"]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-aula_grafos_local}
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 128m
+    ports:
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-17474}:7474"
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-17687}:7687"
+    volumes:
+      - neo4j_data:/data
+      - ./laboratorio/neo4j:/scripts:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:7474"]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 20s
+    mem_limit: 1024m
+
+  influxdb:
+    image: influxdb:3.12.0-core
+    profiles: ["influxdb", "todos"]
+    command: ["influxdb3", "serve", "--node-id", "aula", "--object-store", "file", "--data-dir", "/var/lib/influxdb3/data", "--without-auth"]
+    ports:
+      - "127.0.0.1:${INFLUXDB_PORT:-18086}:8181"
+    volumes:
+      - influxdb_data:/var/lib/influxdb3
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8181/health"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+    mem_limit: 768m
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.8@sha256:0152dd511befe6a2c2ef53e930726179669b08116da78500b37c51c96ff5ee77
+    profiles: ["clickhouse", "todos"]
+    environment:
+      CLICKHOUSE_DB: aula
+      CLICKHOUSE_USER: aula
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-aula_local}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "127.0.0.1:${CLICKHOUSE_HTTP_PORT:-18123}:8123"
+      - "127.0.0.1:${CLICKHOUSE_NATIVE_PORT:-19000}:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+    mem_limit: 1024m
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.4
+    profiles: ["elasticsearch", "todos"]
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms256m -Xmx256m
+      # Ambiente pequeno: evita exigir alterações globais no host.
+      node.store.allow_mmap: "false"
+    ports:
+      - "127.0.0.1:${ELASTICSEARCH_PORT:-19200}:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' > /dev/null"]
+      interval: 5s
+      timeout: 10s
+      retries: 40
+      start_period: 20s
+    mem_limit: 768m
+
+  testes:
+    build: ./laboratorio
+    profiles: ["ferramentas"]
+    environment:
+      PGHOST: postgres
+      PGDATABASE: aula
+      PGUSER: aula
+      PGPASSWORD: ${POSTGRES_PASSWORD:-aula_local}
+      PYTHONUNBUFFERED: "1"
+    working_dir: /lab
+    volumes:
+      - ./laboratorio:/lab:ro
+      - ./resultados:/resultados
+    entrypoint: ["python", "/lab/testes.py"]
+    mem_limit: 256m
+
+  marp:
+    image: marpteam/marp-cli:v4.2.3
+    profiles: ["ferramentas"]
+    working_dir: /home/marp/app
+    environment:
+      MARP_USER: root
+    volumes:
+      - .:/home/marp/app
+    init: true
+    mem_limit: 1024m
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  cassandra_data:
+  neo4j_data:
+  influxdb_data:
+  clickhouse_data:
+  elasticsearch_data:
